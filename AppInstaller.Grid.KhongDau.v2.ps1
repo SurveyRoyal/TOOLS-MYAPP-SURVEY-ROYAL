@@ -1,14 +1,11 @@
 # AppInstaller.Grid.KhongDau.v2.ps1
 # UI: PowerShell + WPF (XAML) — Tabs: Install / CSVV / FONT / AutoCAD
 # PowerShell 5.1 compatible, Light theme
-# NOTE:
-#  - AutoCAD tab: right-click từng phiên bản để nhập URL (OneDrive/SharePoint/Dropbox/MEGA),
-#    chọn EXE/MSI/ZIP/7Z/RAR/001 hoặc chọn thư mục; đặt mật khẩu giải nén nếu cần; cài ngay.
-#  - App tab: double-click 1 app để cài nhanh; hoặc tick nhiều ô -> Install Selected.
-#  - Office Offline: set biến môi trường OFFICE_SRC tới thư mục source offline để cài không tải mạng.
+# Bổ sung: AutoHotkey (cài qua winget) + tạo file .ahk trong Startup
 
-# Bảo đảm TLS 1.2 cho máy cũ
+# TLS cho máy cũ
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+try { Add-Type -AssemblyName System.Web } catch {}
 
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName System.Windows.Forms
@@ -98,15 +95,11 @@ $xaml = @"
         </TabItem>
 
         <TabItem Header="CSVV">
-          <Grid>
-            <TextBlock Margin="10" Text="Tab CSVV (de trong de sua sau)" />
-          </Grid>
+          <Grid><TextBlock Margin="10" Text="Tab CSVV (de trong de sua sau)" /></Grid>
         </TabItem>
 
         <TabItem Header="FONT">
-          <Grid>
-            <TextBlock Margin="10" Text="Tab FONT (de trong de sua sau)"/>
-          </Grid>
+          <Grid><TextBlock Margin="10" Text="Tab FONT (de trong de sua sau)"/></Grid>
         </TabItem>
 
         <TabItem Header="AutoCAD">
@@ -270,6 +263,47 @@ function Install-OfficeODT([hashtable]$opt){
   } catch { Log-Msg ("[ERR] Install-OfficeODT: {0}" -f $_.Exception.Message); return $false }
 }
 
+# ==== AutoHotkey helpers ====
+function Find-AutoHotkeyExe(){
+  $cmd = Get-Command AutoHotkey -ErrorAction SilentlyContinue
+  if($cmd){ return $cmd.Source }
+  foreach($p in @("C:\Program Files\AutoHotkey\AutoHotkey.exe","C:\Program Files (x86)\AutoHotkey\AutoHotkey.exe")){
+    if(Test-Path $p){ return $p }
+  }
+  return $null
+}
+function Ensure-AutoHotkey(){
+  $exe = Find-AutoHotkeyExe
+  if($exe){ return $true }
+  $id = Resolve-Id @("AutoHotkey.AutoHotkey","AutoHotkey.AutoHotkey.Portable")
+  if($id){ if(-not (Install-ById -id $id)){ return $false } }
+  else { Log-Msg "[ERR] Khong tim thay goi AutoHotkey tren winget."; return $false }
+  Start-Sleep -Seconds 2
+  return [bool](Find-AutoHotkeyExe)
+}
+function Install-AHKSample(){
+  if(-not (Ensure-AutoHotkey)){ return $false }
+  $startup = Join-Path ([Environment]::GetFolderPath('Startup')) "MyHotkeys.ahk"
+  $content = @"
+; MyHotkeys.ahk - mau co ban (AutoHotkey v2)
+; Chay cung Windows (file dat trong Startup)
+#SingleInstance Force
+; Hotkey mau:
+;  - Ctrl+Alt+E: mo EVKey (neu cai)
+;  - Win+F2: tat/mở nhanh hien chu viet hoa (capslock)
+;  - CapsLock -> Esc (phu hop coder)
+^!e::Run "C:\Program Files\EVKey\EVKey.exe"
+#F2::SetCapsLockState !GetKeyState("CapsLock","T")
+CapsLock::Esc
+TrayTip "MyHotkeys", "AutoHotkey dang chay tu Startup", 5
+"@
+  Set-Content -Path $startup -Value $content -Encoding UTF8
+  Log-Msg ("[OK] Da tao: {0}" -f $startup)
+  $exe = Find-AutoHotkeyExe
+  if($exe){ Start-Process -FilePath $exe -ArgumentList "`"$startup`"" | Out-Null; Log-Msg "[OK] Da chay AHK script ngay." }
+  return $true
+}
+
 # ==== DỮ LIỆU APP THƯỜNG ====
 $AppCatalog = @{
   "7zip"          = @{ Name="7zip";            Ids=@("7zip.7zip") }
@@ -288,13 +322,16 @@ $AppCatalog = @{
   "EVKey"         = @{ Name="EVKey"; GitHub=@{ Repo="lamquangminh/EVKey" }; Ids=@("tranxuanthang.EVKey","EVKey.EVKey","EVKey") }
   "UniKey"        = @{ Name="UniKey"; Zip=@{ Url="https://www.unikey.org/assets/release/unikey46RC2-230919-win64.zip"; DestDir="$Env:ProgramFiles\UniKey"; Exe="UniKeyNT.exe"; RunArgs=""; CreateShortcut=$true; AddStartup=$true } }
 
+  "AutoHotkey"    = @{ Name="AutoHotkey";      Ids=@("AutoHotkey.AutoHotkey","AutoHotkey.AutoHotkey.Portable") }
+  "AHK Sample"    = @{ Name="AHK Sample (Startup)"; ScriptAction="AHK_SAMPLE" }
+
   "Office ODT"    = @{ Name="Office ODT"; Ids=@("Microsoft.OfficeDeploymentTool") }
   "Office Offline"= @{ Name="Office Offline"; OfficeODT=@{ Channel="Current"; Product="O365ProPlusRetail"; Language="vi-vn"; SourceEnvVar="OFFICE_SRC" } }
 }
 
 $Groups = @(
   @{ Title="Essentials";       Keys=@("7zip","Chrome","Notepad++","VS Code","PowerToys","PC Manager","Rainmeter") },
-  @{ Title="VN Chat & Input";  Keys=@("Zalo","EVKey","UniKey") },
+  @{ Title="VN Chat & Input";  Keys=@("Zalo","EVKey","UniKey","AutoHotkey","AHK Sample") },
   @{ Title="Office";           Keys=@("Office ODT","Office Offline") }
 )
 
@@ -317,13 +354,11 @@ function Pick-Folder(){
   if($dlg.ShowDialog() -eq 'OK'){ return $dlg.SelectedPath } else { return $null }
 }
 
-# ---- 7-Zip helpers (cho .7z/.rar/.001) ----
+# ---- 7-Zip helpers ----
 function Find-7z(){
   $c = Get-Command 7z -ErrorAction SilentlyContinue
   if($c){ return $c.Source }
-  $p1 = Join-Path $env:ProgramFiles '7-Zip\7z.exe'
-  $p2 = Join-Path ${env:ProgramFiles(x86)} '7-Zip\7z.exe'
-  foreach($p in @($p1,$p2)){ if(Test-Path $p){ return $p } }
+  foreach($p in @("C:\Program Files\7-Zip\7z.exe","C:\Program Files (x86)\7-Zip\7z.exe")){ if(Test-Path $p){ return $p } }
   return $null
 }
 function Ensure-7Zip(){
@@ -358,7 +393,7 @@ function Extract-ArchiveAny([string]$file,[string]$dest,[string]$password=""){
   }
 }
 
-# ---- MEGA helpers (mega-get) ----
+# ---- MEGA helpers ----
 function Ensure-MegaCmd(){
   $cmd = Get-Command mega-get -ErrorAction SilentlyContinue
   if($cmd){ return $true }
@@ -390,371 +425,15 @@ function Mega-DownloadToTemp([string]$megaUrl){
   return $latest.FullName
 }
 
-# ---- Biến đổi share URL -> direct (OneDrive/SharePoint/Dropbox) ----
+# ---- Direct hóa URL (OneDrive/SharePoint/Dropbox) ----
 function Transform-UrlForDownload([string]$url){
   try{
     if($url -match 'onedrive\.live\.com'){
       $u = [System.Uri]$url
       $q = [System.Web.HttpUtility]::ParseQueryString($u.Query)
       if($q["cid"] -and $q["resid"]){
-        $auth = if($q["auth                    BorderBrush="{TemplateBinding BorderBrush}"
-                    BorderThickness="{TemplateBinding BorderThickness}"
-                    CornerRadius="8">
-              <Grid Margin="2">
-                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-              </Grid>
-            </Border>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsMouseOver" Value="True">
-                <Setter Property="Background" Value="{StaticResource TileBgHover}"/>
-              </Trigger>
-              <Trigger Property="IsChecked" Value="True">
-                <Setter Property="Background"  Value="{StaticResource Accent}"/>
-                <Setter Property="BorderBrush" Value="{StaticResource Accent}"/>
-              </Trigger>
-              <Trigger Property="IsEnabled" Value="False">
-                <Setter Property="Opacity" Value="0.6"/>
-              </Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
-
-    <Style x:Key="GroupHeader" TargetType="TextBlock">
-      <Setter Property="FontSize" Value="16"/>
-      <Setter Property="FontWeight" Value="Bold"/>
-      <Setter Property="Margin" Value="0,6,0,8"/>
-    </Style>
-  </Window.Resources>
-
-  <DockPanel Margin="10">
-    <!-- Top bar -->
-    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,10">
-      <Button Name="BtnInstallSelected" Content="Install Selected" Width="140" Height="32" Margin="0,0,8,0"/>
-      <Button Name="BtnClear" Content="Clear Selection" Width="140" Height="32" Margin="0,0,8,0"/>
-      <Button Name="BtnGetInstalled" Content="Get Installed" Width="120" Height="32" Margin="0,0,8,0"/>
-      <CheckBox Name="ChkSilent" IsChecked="True" Content="Silent" VerticalAlignment="Center" Margin="0,0,8,0"/>
-      <CheckBox Name="ChkAccept" IsChecked="True" Content="Accept EULA" VerticalAlignment="Center" Margin="0,0,8,0"/>
-    </StackPanel>
-
-    <Grid>
-      <Grid.RowDefinitions>
-        <RowDefinition Height="*"/>
-        <RowDefinition Height="200"/>
-      </Grid.RowDefinitions>
-
-      <TabControl Grid.Row="0">
-        <TabItem Header="Install">
-          <ScrollViewer VerticalScrollBarVisibility="Auto">
-            <StackPanel Name="PanelGroups" Margin="6"/>
-          </ScrollViewer>
-        </TabItem>
-
-        <TabItem Header="CSVV">
-          <Grid>
-            <TextBlock Margin="10" Text="Tab CSVV (de trong de sua sau)" />
-          </Grid>
-        </TabItem>
-
-        <TabItem Header="FONT">
-          <Grid>
-            <TextBlock Margin="10" Text="Tab FONT (de trong de sua sau)"/>
-          </Grid>
-        </TabItem>
-
-        <TabItem Header="AutoCAD">
-          <ScrollViewer VerticalScrollBarVisibility="Auto">
-            <StackPanel Name="PanelAutoCAD" Margin="6"/>
-          </ScrollViewer>
-        </TabItem>
-      </TabControl>
-
-      <!-- Log -->
-      <Grid Grid.Row="1">
-        <Grid.RowDefinitions>
-          <RowDefinition Height="Auto"/>
-          <RowDefinition Height="*"/>
-        </Grid.RowDefinitions>
-        <TextBlock Grid.Row="0" Text="Log" FontWeight="Bold" Margin="0,0,0,4"/>
-        <TextBox Grid.Row="1" Name="TxtLog" Background="#FFFFFF" Foreground="#1C1C1C" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"/>
-      </Grid>
-    </Grid>
-  </DockPanel>
-</Window>
-"@
-
-# ---- Load XAML ----
-$reader = New-Object System.Xml.XmlNodeReader ([xml]$xaml)
-$window = [Windows.Markup.XamlReader]::Load($reader)
-
-# Controls
-$PanelGroups        = $window.FindName("PanelGroups")
-$PanelAutoCAD       = $window.FindName("PanelAutoCAD")
-$BtnInstallSelected = $window.FindName("BtnInstallSelected")
-$BtnClear           = $window.FindName("BtnClear")
-$BtnGetInstalled    = $window.FindName("BtnGetInstalled")
-$TxtLog             = $window.FindName("TxtLog")
-$ChkSilent          = $window.FindName("ChkSilent")
-$ChkAccept          = $window.FindName("ChkAccept")
-
-# ==== Helpers chung ====
-function Log-Msg([string]$msg){
-  $TxtLog.AppendText(("{0}  {1}`r`n" -f (Get-Date).ToString("HH:mm:ss"), $msg))
-  $TxtLog.ScrollToEnd()
-}
-function Resolve-Id([string[]]$candidates){
-  foreach($id in $candidates){
-    $p = Start-Process -FilePath "winget" -ArgumentList @("show","-e","--id",$id) -PassThru -WindowStyle Hidden
-    $p.WaitForExit()
-    if($p.ExitCode -eq 0){ return $id }
-  }
-  return $null
-}
-function Install-ById([string]$id, [string[]]$ExtraArgs=$null){
-  if(-not $id){ return $false }
-  $args = @("install","-e","--id",$id)
-  if($ChkSilent.IsChecked){ $args += "--silent" }
-  if($ChkAccept.IsChecked){ $args += @("--accept-package-agreements","--accept-source-agreements") }
-  if($ExtraArgs){ $args += $ExtraArgs }
-  Log-Msg ("Install: {0}" -f $id)
-  $p = Start-Process -FilePath "winget" -ArgumentList $args -PassThru -WindowStyle Hidden
-  $p.WaitForExit()
-  $code = $p.ExitCode
-  if(($code -eq 0) -or ($code -eq -1978335189)){
-    if($code -eq -1978335189){ Log-Msg ("[OK] already installed / not applicable: {0}" -f $id) }
-    else { Log-Msg ("[OK] installed: {0}" -f $id) }
-    return $true
-  } else { Log-Msg ("[WARN] install failed (ExitCode={0})" -f $code); return $false }
-}
-
-# ---- EXE/MSI/ZIP/GitHub/Office (cho các app thường) ----
-function Install-Exe([hashtable]$exe){
-  try{
-    $url = [string]$exe.Url
-    if([string]::IsNullOrWhiteSpace($url)){ Log-Msg "[ERR] Exe.Url rong"; return $false }
-    $file = Join-Path $env:TEMP ([IO.Path]::GetFileName(($url -split '\?')[0]))
-    Log-Msg ("Download: {0}" -f $url); iwr -useb $url -OutFile $file
-    $sha = $exe.Sha256
-    if($sha){
-      $hash = (Get-FileHash -Algorithm SHA256 -Path $file).Hash.ToLower()
-      if($hash -ne $sha.ToLower()){ Log-Msg "[ERR] SHA256 mismatch"; return $false }
-    }
-    if($file.ToLower().EndsWith(".msi")){
-      $msiArgs = "/i `"$file`" /qn /norestart"; Log-Msg ("MSI: msiexec {0}" -f $msiArgs)
-      $p = Start-Process msiexec -ArgumentList $msiArgs -PassThru -WindowStyle Hidden
-    } else {
-      $args = if([string]::IsNullOrWhiteSpace($exe.Args)) { "/S" } else { [string]$exe.Args }
-      Log-Msg ("EXE: {0} {1}" -f $file,$args)
-      $p = Start-Process -FilePath $file -ArgumentList $args -PassThru -WindowStyle Hidden
-    }
-    $p.WaitForExit()
-    if($p.ExitCode -eq 0){ Log-Msg "[OK] installed"; return $true } else { Log-Msg ("[WARN] exit {0}" -f $p.ExitCode); return $false }
-  } catch { Log-Msg ("[ERR] Install-Exe: {0}" -f $_.Exception.Message); return $false }
-}
-function Install-ZipPackage([hashtable]$zip){
-  try{ Add-Type -AssemblyName System.IO.Compression.FileSystem | Out-Null } catch {}
-  $url=[string]$zip.Url; $dest=[Environment]::ExpandEnvironmentVariables([string]$zip.DestDir)
-  $exe=[string]$zip.Exe; $args=[string]$zip.RunArgs; $mkDesk=[bool]$zip.CreateShortcut; $startup=[bool]$zip.AddStartup
-  if([string]::IsNullOrWhiteSpace($url) -or [string]::IsNullOrWhiteSpace($dest)){ Log-Msg "[ERR] Zip.Url/DestDir rong"; return $false }
-  $zipPath = Join-Path $env:TEMP ([IO.Path]::GetFileName(($url -split '\?')[0]))
-  Log-Msg ("Download: {0}" -f $url); iwr -useb $url -OutFile $zipPath
-  if(-not (Test-Path $dest)){ New-Item -ItemType Directory -Path $dest -Force | Out-Null }
-  [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $dest, $true)
-  if($mkDesk -and $exe){
-    $lnk = Join-Path ([Environment]::GetFolderPath('Desktop')) "UniKey.lnk"
-    $target = Join-Path $dest $exe
-    $ws = New-Object -ComObject WScript.Shell
-    $sc = $ws.CreateShortcut($lnk); $sc.TargetPath = $target; if($args){ $sc.Arguments=$args }; $sc.WorkingDirectory=$dest; $sc.Save()
-  }
-  if($startup -and $exe){
-    $target = Join-Path $dest $exe
-    New-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "UniKey" -Value "`"$target`"" -PropertyType String -Force | Out-Null
-  }
-  Log-Msg "[OK] zip extracted"; return $true
-}
-function Install-GitHubLatest([hashtable]$gh){
-  try{
-    $repo=[string]$gh.Repo; if([string]::IsNullOrWhiteSpace($repo)){ Log-Msg "[ERR] GitHub.Repo rong"; return $false }
-    $api="https://api.github.com/repos/$repo/releases/latest"; Log-Msg ("GitHub API: {0}" -f $api)
-    $rel = Invoke-RestMethod -UseBasicParsing -Headers @{ 'User-Agent'='PowerShell' } -Uri $api -ErrorAction Stop
-    $assets=@($rel.assets)
-    $cand = $assets | Where-Object { $_.name -match '(?i)\.(msi|exe)$' } | Select-Object -First 1
-    if($cand){ return Install-Exe @{ Url=$cand.browser_download_url; Args="/S"; Sha256="" } }
-    $zip = $assets | Where-Object { $_.name -match '(?i)\.zip$' } | Select-Object -First 1
-    if($zip){ return Install-ZipPackage @{ Url=$zip.browser_download_url; DestDir="$Env:ProgramFiles\EVKey"; Exe="EVKey.exe"; RunArgs=""; CreateShortcut=$true; AddStartup=$true } }
-    Log-Msg "[ERR] Khong tim thay asset phu hop"; return $false
-  } catch { Log-Msg ("[ERR] Install-GitHubLatest: {0}" -f $_.Exception.Message); return $false }
-}
-function Install-OfficeODT([hashtable]$opt){
-  try{
-    $channel = if($opt.Channel){$opt.Channel}else{"Current"}
-    $product = if($opt.Product){$opt.Product}else{"O365ProPlusRetail"}
-    $lang    = if($opt.Language){$opt.Language}else{"vi-vn"}
-    $srcEnv  = if($opt.SourceEnvVar){$opt.SourceEnvVar}else{"OFFICE_SRC"}
-    $work = Join-Path $env:TEMP "ODT_$(Get-Random)"; New-Item -ItemType Directory -Path $work -Force | Out-Null
-    $odtExe = Join-Path $work "officedeploymenttool.exe"; $odtUrl = "https://officecdn.microsoft.com/pr/wsus/setup.exe"
-    Log-Msg ("Download ODT: {0}" -f $odtUrl); iwr -useb $odtUrl -OutFile $odtExe
-    Start-Process -FilePath $odtExe -ArgumentList "/quiet /extract:`"$work`"" -Wait
-    $setup = Join-Path $work "setup.exe"; if(-not (Test-Path $setup)){ Log-Msg "[ERR] Khong tim thay setup.exe"; return $false }
-    $cfg = @"
-<Configuration>
-  <Add OfficeClientEdition="64" Channel="$channel">
-    <Product ID="$product"><Language ID="$lang" /></Product>
-  </Add>
-  <RemoveMSI /><Updates Enabled="TRUE" Channel="$channel"/>
-  <Display Level="None" AcceptEULA="TRUE"/><Property Name="AUTOACTIVATE" Value="1"/>
-</Configuration>
-"@
-    $xml = Join-Path $work "config.xml"; Set-Content -Path $xml -Value $cfg -Encoding UTF8
-    $src = [Environment]::GetEnvironmentVariable($srcEnv,"Process"); if(-not $src){ $src=[Environment]::GetEnvironmentVariable($srcEnv,"Machine") }; if(-not $src){ $src=[Environment]::GetEnvironmentVariable($srcEnv,"User") }
-    if($src -and (Test-Path $src)){
-      Log-Msg ("Office Offline: SourcePath = {0}" -f $src)
-      $cfg2 = $cfg -replace "<Add ","<Add SourcePath=`"$([IO.Path]::GetFullPath($src))`" "
-      Set-Content -Path $xml -Value $cfg2 -Encoding UTF8
-      Start-Process -FilePath $setup -ArgumentList "/configure `"$xml`"" -Wait
-      Log-Msg "[OK] Office offline configured."; return $true
-    } else {
-      $dlCfg = $cfg -replace "<Add ","<Add DownloadPath=`"$work\Office`" "
-      $xmlDl = Join-Path $work "download.xml"; Set-Content -Path $xmlDl -Value $dlCfg -Encoding UTF8
-      Log-Msg "Downloading Office content (online)..."; Start-Process -FilePath $setup -ArgumentList "/download `"$xmlDl`"" -Wait
-      Log-Msg "Installing Office from downloaded cache..."; Start-Process -FilePath $setup -ArgumentList "/configure `"$xml`"" -Wait
-      Log-Msg "[OK] Office installed."; return $true
-    }
-  } catch { Log-Msg ("[ERR] Install-OfficeODT: {0}" -f $_.Exception.Message); return $false }
-}
-
-# ==== DỮ LIỆU APP THƯỜNG (không Photoshop/Creative Cloud) ====
-$AppCatalog = @{
-  "7zip"          = @{ Name="7zip";            Ids=@("7zip.7zip") }
-  "Chrome"        = @{ Name="Chrome";          Ids=@("Google.Chrome") }
-  "Notepad++"     = @{ Name="Notepad++";       Ids=@("Notepad++.Notepad++") }
-  "VS Code"       = @{ Name="VS Code";         Ids=@("Microsoft.VisualStudioCode") }
-  "PowerToys"     = @{ Name="PowerToys";       Ids=@("Microsoft.PowerToys") }
-  "PC Manager"    = @{ Name="PC Manager";      Ids=@("Microsoft.PCManager") }
-  "Rainmeter"     = @{ Name="Rainmeter";       Ids=@("Rainmeter.Rainmeter") }
-
-  "Zalo"          = @{
-    Name="Zalo";
-    Exe = @{ Url="https://res-download-pc-te-vnno-cm-1.zadn.vn/win/ZaloSetup-25.8.2.exe"; Args="/S"; Sha256="" };
-    Ids = @("VNG.ZaloPC","Zalo.Zalo","VNG.Zalo","VNGCorp.Zalo")
-  }
-  "EVKey"         = @{ Name="EVKey"; GitHub=@{ Repo="lamquangminh/EVKey" }; Ids=@("tranxuanthang.EVKey","EVKey.EVKey","EVKey") }
-  "UniKey"        = @{ Name="UniKey"; Zip=@{ Url="https://www.unikey.org/assets/release/unikey46RC2-230919-win64.zip"; DestDir="$Env:ProgramFiles\UniKey"; Exe="UniKeyNT.exe"; RunArgs=""; CreateShortcut=$true; AddStartup=$true } }
-
-  "Office ODT"    = @{ Name="Office ODT"; Ids=@("Microsoft.OfficeDeploymentTool") }
-  "Office Offline"= @{ Name="Office Offline"; OfficeODT=@{ Channel="Current"; Product="O365ProPlusRetail"; Language="vi-vn"; SourceEnvVar="OFFICE_SRC" } }
-}
-
-$Groups = @(
-  @{ Title="Essentials";       Keys=@("7zip","Chrome","Notepad++","VS Code","PowerToys","PC Manager","Rainmeter") },
-  @{ Title="VN Chat & Input";  Keys=@("Zalo","EVKey","UniKey") },
-  @{ Title="Office";           Keys=@("Office ODT","Office Offline") }
-)
-
-# ==== AUTO CAD (LOCAL/URL OneDrive/MEGA) ====
-Add-Type -AssemblyName System.Windows.Forms
-[void][Reflection.Assembly]::LoadWithPartialName('Microsoft.VisualBasic') | Out-Null
-
-$AutoCADVersions = @("AutoCAD 2007","AutoCAD 2010","AutoCAD 2019","AutoCAD 2020","AutoCAD 2021","AutoCAD 2022","AutoCAD 2023","AutoCAD 2024","AutoCAD 2025","AutoCAD 2026")
-$AutoCADSources  = @{}  # version -> source (EXE/Folder/URL)
-$AutoCADPwds     = @{}  # version -> password for archive (optional)
-
-function Ask([string]$title,[string]$label,[string]$def=""){
-  [Microsoft.VisualBasic.Interaction]::InputBox($label,$title,$def)
-}
-function Pick-File([string]$filter="Executable (*.exe;*.msi;*.zip;*.7z;*.rar;*.001)|*.exe;*.msi;*.zip;*.7z;*.rar;*.001|All files (*.*)|*.*"){
-  $dlg = New-Object System.Windows.Forms.OpenFileDialog
-  $dlg.Filter = $filter; $dlg.Multiselect=$false
-  if($dlg.ShowDialog() -eq 'OK'){ return $dlg.FileName } else { return $null }
-}
-function Pick-Folder(){
-  $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
-  if($dlg.ShowDialog() -eq 'OK'){ return $dlg.SelectedPath } else { return $null }
-}
-
-# --- 7-Zip helpers (cho .7z/.rar/.001)
-function Find-7z(){
-  $c = Get-Command 7z -ErrorAction SilentlyContinue
-  if($c){ return $c.Source }
-  $p1 = Join-Path $env:ProgramFiles '7-Zip\7z.exe'
-  $p2 = Join-Path ${env:ProgramFiles(x86)} '7-Zip\7z.exe'
-  foreach($p in @($p1,$p2)){ if(Test-Path $p){ return $p } }
-  return $null
-}
-function Ensure-7Zip(){
-  $exe = Find-7z
-  if($exe){ return $exe }
-  try{
-    Start-Process winget -ArgumentList @("install","-e","--id","7zip.7zip","--silent","--accept-package-agreements","--accept-source-agreements") -Wait -WindowStyle Hidden | Out-Null
-  } catch {}
-  return (Find-7z)
-}
-function Extract-7z([string]$archive,[string]$dest,[string]$password=""){
-  $seven = Ensure-7Zip
-  if(-not $seven){ Log-Msg "[ERR] Khong tim thay 7-Zip (7z.exe)."; return $false }
-  if(-not (Test-Path $dest)){ New-Item -ItemType Directory -Path $dest -Force | Out-Null }
-  $args = @("x","-y","-aoa","-o$dest",$archive)
-  if($password){ $args = @("x","-y","-aoa","-p$password","-o$dest",$archive) }
-  Log-Msg ("7z: {0} {1}" -f $seven, ($args -join ' '))
-  $p = Start-Process -FilePath $seven -ArgumentList $args -PassThru -WindowStyle Hidden
-  $p.WaitForExit()
-  if($p.ExitCode -eq 0){ return $true } else { Log-Msg ("[WARN] 7z exit {0}" -f $p.ExitCode); return $false }
-}
-function Extract-ArchiveAny([string]$file,[string]$dest,[string]$password=""){
-  $ext = [IO.Path]::GetExtension($file).ToLower()
-  if($ext -eq ".zip"){
-    try{ Add-Type -AssemblyName System.IO.Compression.FileSystem | Out-Null } catch {}
-    [System.IO.Compression.ZipFile]::ExtractToDirectory($file,$dest,$true)
-    return $true
-  } elseif($ext -in @(".7z",".rar",".001",".cab")){
-    return (Extract-7z -archive $file -dest $dest -password $password)
-  } else {
-    return $false
-  }
-}
-
-# --- MEGA: cài MEGAcmd nếu thiếu và tải
-function Ensure-MegaCmd(){
-  $cmd = Get-Command mega-get -ErrorAction SilentlyContinue
-  if($cmd){ return $true }
-  $cands = @("MEGA.MEGAcmd","MegaLimited.MEGAcmd","MEGA.nz.MEGAcmd")
-  foreach($id in $cands){
-    try{
-      $p = Start-Process -FilePath "winget" -ArgumentList @("show","-e","--id",$id) -PassThru -WindowStyle Hidden
-      $p.WaitForExit()
-      if($p.ExitCode -eq 0){
-        Start-Process -FilePath "winget" -ArgumentList @("install","-e","--id",$id,"--silent","--accept-package-agreements","--accept-source-agreements") -Wait -WindowStyle Hidden | Out-Null
-        $cmd = Get-Command mega-get -ErrorAction SilentlyContinue
-        if($cmd){ return $true }
-      }
-    } catch {}
-  }
-  return $false
-}
-function Mega-DownloadToTemp([string]$megaUrl){
-  if(-not (Ensure-MegaCmd)){ Log-Msg "[ERR] Khong tim thay MEGAcmd (mega-get)."; return $null }
-  $outDir = Join-Path $env:TEMP ("mega_" + (Get-Random))
-  New-Item -ItemType Directory -Path $outDir -Force | Out-Null
-  Log-Msg ("MEGA: mega-get -> {0}" -f $outDir)
-  $p = Start-Process -FilePath "mega-get" -ArgumentList @($megaUrl,$outDir) -PassThru -WindowStyle Hidden
-  $p.WaitForExit()
-  if($p.ExitCode -ne 0){ Log-Msg ("[ERR] mega-get exit {0}" -f $p.ExitCode); return $null }
-  $items = Get-ChildItem -Path $outDir -Force -ErrorAction SilentlyContinue
-  if(-not $items){ return $outDir }
-  $latest = $items | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-  return $latest.FullName
-}
-
-# --- Biến đổi link chia sẻ -> link tải trực tiếp (OneDrive/SharePoint/Dropbox)
-function Transform-UrlForDownload([string]$url){
-  try{
-    if($url -match 'onedrive\.live\.com'){
-      # https://onedrive.live.com/?cid=...&resid=...&authkey=...  -> download
-      $u = [System.Uri]$url
-      $q = [System.Web.HttpUtility]::ParseQueryString($u.Query)
-      if($q["cid"] -and $q["resid"]){
-        return "https://onedrive.live.com/download?cid=$($q['cid'])&resid=$($q['resid'])" + ($(if($q["authkey"]){ "&authkey=$($q['authkey'])" } else { "" }))
+        $auth = if($q["authkey"]){ "&authkey=$($q['authkey'])" } else { "" }
+        return "https://onedrive.live.com/download?cid=$($q['cid'])&resid=$($q['resid'])$auth"
       }
     }
     if($url -match 'sharepoint\.com'){
@@ -768,12 +447,11 @@ function Transform-UrlForDownload([string]$url){
   return $url
 }
 
-# --- URL/local -> trả về @{ Kind="file"/"folder"; Path="..." }; tự tải & giải nén nếu là ZIP/7Z/RAR
+# ---- URL/local -> local temp (file/folder); auto extract nếu là ZIP/7Z/RAR/001 ----
 function Get-LocalFromSource([string]$src,[string]$password=""){
   if([string]::IsNullOrWhiteSpace($src)){ return $null }
 
   if($src -match '^https?://'){
-    # MEGA
     if($src -match 'mega(\.co)?\.nz'){
       $p = Mega-DownloadToTemp $src
       if(-not $p){ return $null }
@@ -781,18 +459,10 @@ function Get-LocalFromSource([string]$src,[string]$password=""){
       if(Test-Path $p -PathType Container){ return @{ Kind="folder"; Path=$p } }
       return $null
     }
-
-    # Chuyển share URL -> direct nếu có thể
     $src = Transform-UrlForDownload $src
-
-    # Tải về tạm
     $tmp = Join-Path $env:TEMP ("pkg_" + [IO.Path]::GetFileName(($src -split '\?')[0]))
     Log-Msg ("Download: {0}" -f $src)
-    try{
-      iwr -useb $src -OutFile $tmp
-    } catch {
-      Log-Msg ("[ERR] Download failed: {0}" -f $_.Exception.Message); return $null
-    }
+    try{ iwr -useb $src -OutFile $tmp } catch { Log-Msg ("[ERR] Download failed: {0}" -f $_.Exception.Message); return $null }
 
     $low = $tmp.ToLower()
     if($low.EndsWith(".zip") -or $low.EndsWith(".7z") -or $low.EndsWith(".rar") -or $low.EndsWith(".001") -or $low.EndsWith(".cab")){
@@ -811,6 +481,7 @@ function Get-LocalFromSource([string]$src,[string]$password=""){
   return $null
 }
 
+# ---- AutoCAD installers ----
 function Invoke-Proc($file,$args,$wd){
   $p = Start-Process -FilePath $file -ArgumentList $args -WorkingDirectory $wd -PassThru -WindowStyle Hidden
   $p.WaitForExit(); return $p.ExitCode
@@ -823,10 +494,7 @@ function Install-AutoCADFromExe([string]$file){
     $ec = Invoke-Proc "msiexec.exe" $msiArgs $wd
     if($ec -eq 0){ Log-Msg "[OK] MSI installed"; return $true } else { Log-Msg ("[WARN] MSI exit {0}" -f $ec); return $false }
   }
-  $cands = @(
-    "/quiet", "/silent", "--quiet", "--silent",
-    "/S", "/VERYSILENT", "/s /v`"/qn REBOOT=ReallySuppress`"", "-q", ""
-  )
+  $cands = @("/quiet","/silent","--quiet","--silent","/S","/VERYSILENT","/s /v`"/qn REBOOT=ReallySuppress`"","-q","")
   foreach($a in $cands){
     Log-Msg ("Try: `"{0}`" {1}" -f $file,$a)
     $ec = Invoke-Proc $file $a $wd
@@ -836,10 +504,8 @@ function Install-AutoCADFromExe([string]$file){
 }
 function Install-AutoCADFromFolder([string]$dir){
   if(-not (Test-Path $dir)){ Log-Msg "[ERR] Thu muc khong ton tai."; return $false }
-  # 1) Ưu tiên MSI
   $msi = Get-ChildItem -Path $dir -Recurse -Filter *.msi -ErrorAction SilentlyContinue | Select-Object -First 1
   if($msi){ return Install-AutoCADFromExe $msi.FullName }
-  # 2) Dò các installer phổ biến
   $exe = Get-ChildItem -Path $dir -Recurse -Include AutodeskInstaller.exe,Install.exe,install.exe,Setup.exe,setup.exe,*.exe -ErrorAction SilentlyContinue |
          Sort-Object Length | Select-Object -First 1
   if($exe){ return Install-AutoCADFromExe $exe.FullName }
@@ -870,7 +536,7 @@ function Add-AutoCADContextMenu($cb,[string]$ver){
   $miUrl.Header = "Nhap URL (OneDrive/SharePoint/Dropbox/MEGA)..."
   $miUrl.Add_Click({
     $def = if($AutoCADSources.ContainsKey($ver)){$AutoCADSources[$ver]} else {""}
-    $v = Ask "AutoCAD Source URL" "Nhap URL bo cai:" $def
+    $v = [Microsoft.VisualBasic.Interaction]::InputBox("Nhap URL bo cai:","AutoCAD Source URL",$def)
     if($v){ $AutoCADSources[$ver] = $v; Log-Msg ("[{0}] Source = {1}" -f $ver,$v) }
   })
   $cm.Items.Add($miUrl) | Out-Null
@@ -878,16 +544,17 @@ function Add-AutoCADContextMenu($cb,[string]$ver){
   $mi1 = New-Object System.Windows.Controls.MenuItem
   $mi1.Header = "Chon EXE/MSI/ZIP/7Z/RAR..."
   $mi1.Add_Click({
-    $f = Pick-File
-    if($f){ $AutoCADSources[$ver] = $f; Log-Msg ("[{0}] Source = {1}" -f $ver,$f) }
+    $dlg = New-Object System.Windows.Forms.OpenFileDialog
+    $dlg.Filter = "Executable/Archive (*.exe;*.msi;*.zip;*.7z;*.rar;*.001)|*.exe;*.msi;*.zip;*.7z;*.rar;*.001|All files (*.*)|*.*"
+    if($dlg.ShowDialog() -eq 'OK'){ $AutoCADSources[$ver] = $dlg.FileName; Log-Msg ("[{0}] Source = {1}" -f $ver,$dlg.FileName) }
   })
   $cm.Items.Add($mi1) | Out-Null
 
   $mi2 = New-Object System.Windows.Controls.MenuItem
   $mi2.Header = "Chon thu muc bo cai..."
   $mi2.Add_Click({
-    $d = Pick-Folder
-    if($d){ $AutoCADSources[$ver] = $d; Log-Msg ("[{0}] Source = {1}" -f $ver,$d) }
+    $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
+    if($dlg.ShowDialog() -eq 'OK'){ $AutoCADSources[$ver] = $dlg.SelectedPath; Log-Msg ("[{0}] Source = {1}" -f $ver,$dlg.SelectedPath) }
   })
   $cm.Items.Add($mi2) | Out-Null
 
@@ -902,7 +569,7 @@ function Add-AutoCADContextMenu($cb,[string]$ver){
   $miPwd.Header = "Dat mat khau giai nen..."
   $miPwd.Add_Click({
     $def = if($AutoCADPwds.ContainsKey($ver)){$AutoCADPwds[$ver]} else {""}
-    $v = Ask "Password" "Nhap mat khau (neu co):" $def
+    $v = [Microsoft.VisualBasic.Interaction]::InputBox("Nhap mat khau (neu co):","Password",$def)
     if($v -ne $null){
       if($v){ $AutoCADPwds[$ver] = $v; Log-Msg ("[{0}] Password set ({1} ky tu)" -f $ver,$v.Length) }
       else { $AutoCADPwds.Remove($ver) | Out-Null; Log-Msg ("[{0}] Password cleared" -f $ver) }
@@ -926,8 +593,8 @@ function Add-AutoCADContextMenu($cb,[string]$ver){
   $cb.ContextMenu = $cm
 }
 
-# ==== Xây UI cho tab Install (apps thường) ====
-$CheckBoxes = @{}  # key -> CheckBox (bao gồm cả AutoCAD để dùng Install Selected)
+# ==== UI: Install tab ====
+$CheckBoxes = @{}  # key -> CheckBox (kể cả AutoCAD để Install Selected)
 foreach($g in $Groups){
   $gb = New-Object System.Windows.Controls.GroupBox
   $gb.Header = $g.Title
@@ -950,6 +617,7 @@ foreach($g in $Groups){
         $key = $s.Tag; $s.IsEnabled = $false
         try {
           $info2 = $AppCatalog[$key]
+          if($info2.ScriptAction -eq "AHK_SAMPLE"){ [void](Install-AHKSample); return }
           if($info2.Exe){ [void](Install-Exe -exe $info2.Exe); return }
           if($info2.Zip){ [void](Install-ZipPackage -zip $info2.Zip); return }
           if($info2.GitHub){ [void](Install-GitHubLatest -gh $info2.GitHub); return }
@@ -962,7 +630,7 @@ foreach($g in $Groups){
   $PanelGroups.Children.Add($gb) | Out-Null
 }
 
-# ==== Xây UI cho tab AutoCAD ====
+# ==== UI: AutoCAD tab ====
 $gbAC = New-Object System.Windows.Controls.GroupBox
 $gbAC.Header = "AutoCAD Versions"
 $gbAC.Margin = "0,0,0,10"
@@ -974,7 +642,7 @@ foreach($ver in $AutoCADVersions){
   $cb.Tag = $ver
   $cb.Width = 180; $cb.Height = 38
   $panelAC.Children.Add($cb) | Out-Null
-  $CheckBoxes[$ver] = $cb  # để Install Selected xử lý
+  $CheckBoxes[$ver] = $cb
 
   Add-AutoCADContextMenu -cb $cb -ver $ver
 
@@ -1011,6 +679,7 @@ $BtnInstallSelected.Add_Click({
         [void](Install-AutoCADAuto -version $k)
       } else {
         $info = $AppCatalog[$k]
+        if($info.ScriptAction -eq "AHK_SAMPLE"){ [void](Install-AHKSample); continue }
         if($info.Exe){ [void](Install-Exe -exe $info.Exe); continue }
         if($info.Zip){ [void](Install-ZipPackage -zip $info.Zip); continue }
         if($info.GitHub){ [void](Install-GitHubLatest -gh $info.GitHub); continue }
@@ -1022,5 +691,5 @@ $BtnInstallSelected.Add_Click({
   Log-Msg "Done."
 })
 
-# Show
+# Show UI
 $window.ShowDialog() | Out-Null
