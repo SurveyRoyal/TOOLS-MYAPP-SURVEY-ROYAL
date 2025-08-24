@@ -1,8 +1,12 @@
-# AppInstaller.Grid.KhongDau.ps1
-# UI: PowerShell + WPF (XAML)
-# Tabs: Install / CSVV / FONT (CSVV & FONT as placeholders to edit later)
-# Labels: ASCII (khong dau)
-# Tested on PowerShell 5.1+ (no ternary operator)
+# AppInstaller.Grid.KhongDau.v2.ps1 (enhanced)
+# UI: PowerShell + WPF (XAML) - PS 5.1 compatible
+# Tabs: Install / CSVV / FONT (2 tab sau de trong)
+# Tinh nang moi:
+#  - Search loc tile
+#  - Force cai (winget --force)
+#  - Upgrade Selected
+#  - Select All/None/Install Group tren tung nhom
+#  - Exit code -1978335189 coi la OK (already installed / not applicable)
 
 Add-Type -AssemblyName PresentationFramework
 
@@ -10,7 +14,8 @@ Add-Type -AssemblyName PresentationFramework
 $xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="App Installer - Khong Dau" Width="1100" Height="700" Background="#1e1e1e" Foreground="White" WindowStartupLocation="CenterScreen">
+        Title="App Installer - Khong Dau" Width="1180" Height="720"
+        Background="#1e1e1e" Foreground="White" WindowStartupLocation="CenterScreen">
   <Window.Resources>
     <Style x:Key="TileCheckBox" TargetType="CheckBox">
       <Setter Property="Margin" Value="6"/>
@@ -48,10 +53,11 @@ $xaml = @"
         </Setter.Value>
       </Setter>
     </Style>
-    <Style x:Key="GroupHeader" TargetType="TextBlock">
+    <Style x:Key="GroupHeaderText" TargetType="TextBlock">
       <Setter Property="FontSize" Value="16"/>
       <Setter Property="FontWeight" Value="Bold"/>
-      <Setter Property="Margin" Value="0,6,0,8"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+      <Setter Property="Margin" Value="0,0,8,0"/>
     </Style>
   </Window.Resources>
 
@@ -59,16 +65,20 @@ $xaml = @"
     <!-- Top bar -->
     <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,10">
       <Button Name="BtnInstallSelected" Content="Install Selected" Width="140" Height="32" Margin="0,0,8,0"/>
+      <Button Name="BtnUpgradeSelected" Content="Upgrade Selected" Width="150" Height="32" Margin="0,0,8,0"/>
       <Button Name="BtnClear" Content="Clear Selection" Width="140" Height="32" Margin="0,0,8,0"/>
       <Button Name="BtnGetInstalled" Content="Get Installed" Width="120" Height="32" Margin="0,0,8,0"/>
+      <CheckBox Name="ChkForce" Content="Force" VerticalAlignment="Center" Margin="0,0,8,0"/>
       <CheckBox Name="ChkSilent" IsChecked="True" Content="Silent" VerticalAlignment="Center" Margin="0,0,8,0"/>
       <CheckBox Name="ChkAccept" IsChecked="True" Content="Accept EULA" VerticalAlignment="Center" Margin="0,0,8,0"/>
+      <TextBox Name="TxtSearch" Width="240" Height="32" Margin="10,0,6,0" ToolTip="Search"/>
+      <Button Name="BtnSearchClear" Content="X" Width="30" Height="30"/>
     </StackPanel>
 
     <Grid>
       <Grid.RowDefinitions>
         <RowDefinition Height="*"/>
-        <RowDefinition Height="160"/>
+        <RowDefinition Height="180"/>
       </Grid.RowDefinitions>
 
       <TabControl Grid.Row="0">
@@ -98,7 +108,8 @@ $xaml = @"
           <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
         <TextBlock Grid.Row="0" Text="Log" FontWeight="Bold" Margin="0,0,0,4"/>
-        <TextBox Grid.Row="1" Name="TxtLog" Background="#181818" Foreground="White" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"/>
+        <TextBox Grid.Row="1" Name="TxtLog" Background="#181818" Foreground="White" IsReadOnly="True"
+                 TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"/>
       </Grid>
     </Grid>
   </DockPanel>
@@ -112,45 +123,64 @@ $window = [Windows.Markup.XamlReader]::Load($reader)
 # Find controls
 $PanelGroups        = $window.FindName("PanelGroups")
 $BtnInstallSelected = $window.FindName("BtnInstallSelected")
+$BtnUpgradeSelected = $window.FindName("BtnUpgradeSelected")
 $BtnClear           = $window.FindName("BtnClear")
 $BtnGetInstalled    = $window.FindName("BtnGetInstalled")
 $TxtLog             = $window.FindName("TxtLog")
 $ChkSilent          = $window.FindName("ChkSilent")
 $ChkAccept          = $window.FindName("ChkAccept")
-
-# ---- Data: Apps & Groups ----
-# Use "Keys" to map to $AppCatalog entries
-$AppCatalog = @{
-  "7zip"          = @{ Name = "7zip";            Ids = @("7zip.7zip") }
-  "Chrome"        = @{ Name = "Chrome";          Ids = @("Google.Chrome") }
-  "Notepad++"     = @{ Name = "Notepad++";       Ids = @("Notepad++.Notepad++") }
-  "VS Code"       = @{ Name = "VS Code";         Ids = @("Microsoft.VisualStudioCode") }
-  "PowerToys"     = @{ Name = "PowerToys";       Ids = @("Microsoft.PowerToys") }
-  "PC Manager"    = @{ Name = "PC Manager";      Ids = @("Microsoft.PCManager") }
-  "Rainmeter"     = @{ Name = "Rainmeter";       Ids = @("Rainmeter.Rainmeter") }
-  "Zalo"          = @{ Name = "Zalo";            Ids = @("VNG.ZaloPC","Zalo.Zalo","VNG.Zalo","VNGCorp.Zalo") }
-  "EVKey"         = @{ Name = "EVKey";           Ids = @("tranxuanthang.EVKey","EVKey.EVKey","EVKey") }
-  "Office ODT"    = @{ Name = "Office ODT";      Ids = @("Microsoft.OfficeDeploymentTool") }
-  "Creative Cloud"= @{ Name = "Creative Cloud";  Ids = @("Adobe.CreativeCloud","Adobe.Photoshop") }
-  "AutoCAD"       = @{ Name = "AutoCAD";         Ids = @("Autodesk.AutoCAD","Autodesk.AutoCADLT") }
-}
-
-$Groups = @(
-  @{ Title = "Essentials";       Keys = @("7zip","Chrome","Notepad++","VS Code","PowerToys","PC Manager","Rainmeter") },
-  @{ Title = "VN Chat & Input";  Keys = @("Zalo","EVKey") },
-  @{ Title = "Office";           Keys = @("Office ODT") },
-  @{ Title = "Design & CAD";     Keys = @("Creative Cloud","AutoCAD") }
-)
+$ChkForce           = $window.FindName("ChkForce")
+$TxtSearch          = $window.FindName("TxtSearch")
+$BtnSearchClear     = $window.FindName("BtnSearchClear")
 
 # ---- Helpers ----
+function Is-Admin {
+  try {
+    $wi = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $wp = New-Object Security.Principal.WindowsPrincipal($wi)
+    return $wp.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+  } catch { return $false }
+}
+
 function Log-Msg([string]$msg){
   $TxtLog.AppendText(("{0}  {1}`r`n" -f (Get-Date).ToString("HH:mm:ss"), $msg))
   $TxtLog.ScrollToEnd()
 }
 
+if(-not (Is-Admin)){
+  Log-Msg "[WARN] Nen chay PowerShell 'Run as Administrator' de winget cai dat khong bi chan."
+}
+
+# ---- Data: Apps & Groups ----
+# Keys map -> $AppCatalog entries (ASCII/khong dau)
+$AppCatalog = @(
+  @{ Key="7zip";           Name="7zip";            Ids=@("7zip.7zip") },
+  @{ Key="Chrome";         Name="Chrome";          Ids=@("Google.Chrome") },
+  @{ Key="Notepad++";      Name="Notepad++";       Ids=@("Notepad++.Notepad++") },
+  @{ Key="VS Code";        Name="VS Code";         Ids=@("Microsoft.VisualStudioCode") },
+  @{ Key="PowerToys";      Name="PowerToys";       Ids=@("Microsoft.PowerToys") },
+  @{ Key="PC Manager";     Name="PC Manager";      Ids=@("Microsoft.PCManager") },
+  @{ Key="Rainmeter";      Name="Rainmeter";       Ids=@("Rainmeter.Rainmeter") },
+  @{ Key="Zalo";           Name="Zalo";            Ids=@("VNG.ZaloPC","Zalo.Zalo","VNG.Zalo","VNGCorp.Zalo") },
+  @{ Key="EVKey";          Name="EVKey";           Ids=@("tranxuanthang.EVKey","EVKey.EVKey","EVKey") },
+  @{ Key="Office ODT";     Name="Office ODT";      Ids=@("Microsoft.OfficeDeploymentTool") },
+  @{ Key="Creative Cloud"; Name="Creative Cloud";  Ids=@("Adobe.CreativeCloud","Adobe.Photoshop") },
+  @{ Key="AutoCAD";        Name="AutoCAD";         Ids=@("Autodesk.AutoCAD","Autodesk.AutoCADLT") }
+)
+
+# Index for quick lookup by key
+$AppByKey = @{}
+foreach($a in $AppCatalog){ $AppByKey[$a.Key] = $a }
+
+$Groups = @(
+  @{ Title="Essentials";      Keys=@("7zip","Chrome","Notepad++","VS Code","PowerToys","PC Manager","Rainmeter") },
+  @{ Title="VN Chat & Input"; Keys=@("Zalo","EVKey") },
+  @{ Title="Office";          Keys=@("Office ODT") },
+  @{ Title="Design & CAD";    Keys=@("Creative Cloud","AutoCAD") }
+)
+
 function Resolve-Id([string[]]$candidates){
   foreach($id in $candidates){
-    # Use 'winget show -e --id' to verify existence
     $p = Start-Process -FilePath "winget" -ArgumentList @("show","-e","--id",$id) -PassThru -WindowStyle Hidden
     $p.WaitForExit()
     if($p.ExitCode -eq 0){ return $id }
@@ -161,18 +191,19 @@ function Resolve-Id([string[]]$candidates){
 function Install-ById([string]$id){
   if(-not $id){ return $false }
   $args = @("install","-e","--id",$id)
+  if($ChkForce.IsChecked){ $args += "--force" }
   if($ChkSilent.IsChecked){ $args += "--silent" }
-  if($ChkAccept.IsChecked){
-    $args += @("--accept-package-agreements","--accept-source-agreements")
-  }
+  if($ChkAccept.IsChecked){ $args += @("--accept-package-agreements","--accept-source-agreements") }
+
   Log-Msg ("Install: {0}" -f $id)
   $p = Start-Process -FilePath "winget" -ArgumentList $args -PassThru -WindowStyle Hidden
   $p.WaitForExit()
   $code = $p.ExitCode
-  # Treat -1978335189 (0x8A15002B, APPINSTALLER_CLI_ERROR_UPDATE_NOT_APPLICABLE) as success
-  if(($code -eq 0) -or ($code -eq -1978335189)){
+
+  # 0: success ; -1978335189: already installed / update not applicable
+  if($code -eq 0 -or $code -eq -1978335189){
     if($code -eq -1978335189){
-      Log-Msg ("[OK] already installed / no applicable update: {0}" -f $id)
+      Log-Msg ("[OK] already installed / not applicable: {0}" -f $id)
     } else {
       Log-Msg ("[OK] installed: {0}" -f $id)
     }
@@ -183,20 +214,67 @@ function Install-ById([string]$id){
   }
 }
 
-# Dictionary to keep generated CheckBoxes
-$CheckBoxes = @{}  # key -> CheckBox
+function Upgrade-ById([string]$id){
+  if(-not $id){ return $false }
+  $args = @("upgrade","-e","--id",$id)
+  if($ChkSilent.IsChecked){ $args += "--silent" }
+  if($ChkAccept.IsChecked){ $args += @("--accept-package-agreements","--accept-source-agreements") }
 
-# Build UI groups dynamically
+  Log-Msg ("Upgrade: {0}" -f $id)
+  $p = Start-Process -FilePath "winget" -ArgumentList $args -PassThru -WindowStyle Hidden
+  $p.WaitForExit()
+  if($p.ExitCode -eq 0){
+    Log-Msg ("[OK] upgraded or no update: {0}" -f $id)
+    return $true
+  } else {
+    Log-Msg ("[WARN] upgrade failed (ExitCode={0})" -f $p.ExitCode)
+    return $false
+  }
+}
+
+# Dictionary for CheckBoxes and group containers
+$CheckBoxes = @{}     # key -> CheckBox
+$GroupPanels = @{}    # groupTitle -> WrapPanel
+
+# Build group UI
 foreach($g in $Groups){
   $gb = New-Object System.Windows.Controls.GroupBox
-  $gb.Header = $g.Title
   $gb.Margin = "0,0,0,10"
 
+  # Header: title + actions
+  $header = New-Object System.Windows.Controls.DockPanel
+  $t = New-Object System.Windows.Controls.TextBlock
+  $t.Text = $g.Title
+  $t.Style = $window.Resources["GroupHeaderText"]
+  [System.Windows.Controls.DockPanel]::SetDock($t, "Left")
+  $header.Children.Add($t) | Out-Null
+
+  $hstack = New-Object System.Windows.Controls.StackPanel
+  $hstack.Orientation = "Horizontal"
+  $hstack.HorizontalAlignment = "Right"
+
+  $btnAll = New-Object System.Windows.Controls.Button
+  $btnAll.Content = "Select All"
+  $btnAll.Margin = "4,0,0,0"
+  $btnNone = New-Object System.Windows.Controls.Button
+  $btnNone.Content = "None"
+  $btnNone.Margin = "4,0,0,0"
+  $btnInstallGroup = New-Object System.Windows.Controls.Button
+  $btnInstallGroup.Content = "Install Group"
+  $btnInstallGroup.Margin = "4,0,0,0"
+
+  $hstack.Children.Add($btnAll) | Out-Null
+  $hstack.Children.Add($btnNone) | Out-Null
+  $hstack.Children.Add($btnInstallGroup) | Out-Null
+  [System.Windows.Controls.DockPanel]::SetDock($hstack, "Right")
+  $header.Children.Add($hstack) | Out-Null
+  $gb.Header = $header
+
   $panel = New-Object System.Windows.Controls.WrapPanel
-  $panel.Margin = "0,0,0,0"
+  $panel.Margin = "0,6,0,0"
 
   foreach($k in $g.Keys){
-    $info = $AppCatalog[$k]
+    $info = $AppByKey[$k]
     if(-not $info){ continue }
     $cb = New-Object System.Windows.Controls.CheckBox
     $cb.Style = $window.Resources["TileCheckBox"]
@@ -207,30 +285,52 @@ foreach($g in $Groups){
     $panel.Children.Add($cb) | Out-Null
     $CheckBoxes[$k] = $cb
 
-    # Left-click on checkbox text also triggers single install immediately (optional)
-    $cb.AddHandler([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent, [System.Windows.RoutedEventHandler]{ param($s,$e)
-      # If user just toggles selection, do nothing else; to immediate install on double click would need extra code.
-    })
-    # Double-click to install immediately
-    $cb.AddHandler([System.Windows.Controls.Control]::MouseDoubleClickEvent, [System.Windows.Input.MouseButtonEventHandler]{ param($s,$e)
-      $key = $s.Tag
-      $info2 = $AppCatalog[$key]
-      if($null -eq $info2){ return }
-      $id = Resolve-Id -candidates $info2.Ids
-      if($null -eq $id){
-        Log-Msg ("[ERR] not found on winget: {0}" -f ($info2.Ids -join " | "))
-        return
-      }
-      $s.IsEnabled = $false
-      try { [void](Install-ById -id $id) } finally { $s.IsEnabled = $true }
-    })
+    # Double-click: install single
+    $cb.AddHandler([System.Windows.Controls.Control]::MouseDoubleClickEvent,
+      [System.Windows.Input.MouseButtonEventHandler]{ param($s,$e)
+        $key = $s.Tag
+        $i2 = $AppByKey[$key]
+        if($null -eq $i2){ return }
+        $id = Resolve-Id -candidates $i2.Ids
+        if($null -eq $id){ Log-Msg ("[ERR] not found on winget: {0}" -f ($i2.Ids -join " | ")); return }
+        $s.IsEnabled = $false
+        try { [void](Install-ById -id $id) } finally { $s.IsEnabled = $true }
+      })
   }
+
+  # Header buttons actions
+  $btnAll.Add_Click({ foreach($k in $g.Keys){ if($CheckBoxes.ContainsKey($k)){ $CheckBoxes[$k].IsChecked = $true } } })
+  $btnNone.Add_Click({ foreach($k in $g.Keys){ if($CheckBoxes.ContainsKey($k)){ $CheckBoxes[$k].IsChecked = $false } } })
+  $btnInstallGroup.Add_Click({
+    foreach($k in $g.Keys){
+      if(-not $CheckBoxes.ContainsKey($k)){ continue }
+      $info = $AppByKey[$k]
+      $id = Resolve-Id -candidates $info.Ids
+      if($null -eq $id){ Log-Msg ("[ERR] not found on winget: {0}" -f ($info.Ids -join " | ")); continue }
+      $cb = $CheckBoxes[$k]; $cb.IsEnabled = $false
+      try { [void](Install-ById -id $id) } finally { $cb.IsEnabled = $true }
+    }
+  })
 
   $gb.Content = $panel
   $PanelGroups.Children.Add($gb) | Out-Null
+  $GroupPanels[$g.Title] = $panel
 }
 
-# Button handlers
+# Search filter
+function Apply-Search {
+  $q = ($TxtSearch.Text).ToString()
+  $q = if([string]::IsNullOrWhiteSpace($q)) { "" } else { $q.Trim().ToLower() }
+  foreach($kv in $CheckBoxes.GetEnumerator()){
+    $cb = $kv.Value
+    $name = ($cb.Content).ToString().ToLower()
+    $cb.Visibility = if($q -eq "" -or $name -like "*$q*"){ "Visible" } else { "Collapsed" }
+  }
+}
+$TxtSearch.Add_TextChanged({ Apply-Search })
+$BtnSearchClear.Add_Click({ $TxtSearch.Text=""; Apply-Search })
+
+# Top buttons
 $BtnClear.Add_Click({
   foreach($cb in $CheckBoxes.Values){ $cb.IsChecked = $false }
   Log-Msg "Selection cleared."
@@ -238,37 +338,42 @@ $BtnClear.Add_Click({
 
 $BtnGetInstalled.Add_Click({
   Log-Msg "winget list ..."
-  $p = Start-Process -FilePath "winget" -ArgumentList @("list") -PassThru -WindowStyle Hidden -RedirectStandardOutput ([System.IO.Path]::GetTempFileName())
+  $tmpOut = [System.IO.Path]::GetTempFileName()
+  $p = Start-Process -FilePath "winget" -ArgumentList @("list") -PassThru -WindowStyle Hidden -RedirectStandardOutput $tmpOut
   $p.WaitForExit()
-  try {
-    $out = Get-Content -Raw $p.RedirectStandardOutput
-    Log-Msg $out
-  } catch {
-    Log-Msg "[WARN] cannot read output."
-  }
+  try { Log-Msg (Get-Content -Raw $tmpOut) } catch { Log-Msg "[WARN] cannot read output." }
+  Remove-Item -ErrorAction SilentlyContinue $tmpOut
 })
 
 $BtnInstallSelected.Add_Click({
-  $selectedKeys = @()
-  foreach($kv in $CheckBoxes.GetEnumerator()){
-    if($kv.Value.IsChecked){ $selectedKeys += $kv.Key }
-  }
-  if($selectedKeys.Count -eq 0){ Log-Msg "Chua chon ung dung nao."; return }
-  Log-Msg ("Installing {0} item(s)..." -f $selectedKeys.Count)
-  foreach($k in $selectedKeys){
-    $info = $AppCatalog[$k]
+  $sel = @()
+  foreach($kv in $CheckBoxes.GetEnumerator()){ if($kv.Value.IsChecked){ $sel += $kv.Key } }
+  if($sel.Count -eq 0){ Log-Msg "Chua chon ung dung nao."; return }
+  Log-Msg ("Installing {0} item(s)..." -f $sel.Count)
+  foreach($k in $sel){
+    $info = $AppByKey[$k]
     $id = Resolve-Id -candidates $info.Ids
-    if($null -eq $id){
-      Log-Msg ("[ERR] not found on winget: {0}" -f ($info.Ids -join " | "))
-      continue
-    }
-    # Disable checkbox while installing
-    $cb = $CheckBoxes[$k]
-    $cb.IsEnabled = $false
+    if($null -eq $id){ Log-Msg ("[ERR] not found on winget: {0}" -f ($info.Ids -join " | ")); continue }
+    $cb = $CheckBoxes[$k]; $cb.IsEnabled = $false
     try { [void](Install-ById -id $id) } finally { $cb.IsEnabled = $true }
   }
   Log-Msg "Done."
 })
 
-# Show
+$BtnUpgradeSelected.Add_Click({
+  $sel = @()
+  foreach($kv in $CheckBoxes.GetEnumerator()){ if($kv.Value.IsChecked){ $sel += $kv.Key } }
+  if($sel.Count -eq 0){ Log-Msg "Chua chon ung dung nao."; return }
+  Log-Msg ("Upgrading {0} item(s)..." -f $sel.Count)
+  foreach($k in $sel){
+    $info = $AppByKey[$k]
+    $id = Resolve-Id -candidates $info.Ids
+    if($null -eq $id){ Log-Msg ("[ERR] not found on winget: {0}" -f ($info.Ids -join " | ")); continue }
+    $cb = $CheckBoxes[$k]; $cb.IsEnabled = $false
+    try { [void](Upgrade-ById -id $id) } finally { $cb.IsEnabled = $true }
+  }
+  Log-Msg "Done."
+})
+
+# Show UI
 $window.ShowDialog() | Out-Null
