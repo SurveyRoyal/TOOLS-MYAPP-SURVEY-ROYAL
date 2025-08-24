@@ -1,6 +1,6 @@
 # AppInstaller.Grid.KhongDau.v2.ps1
 # UI: PowerShell + WPF (XAML) — Tabs: Install / CSVV / FONT
-# PowerShell 5.1 compatible — Có nút chuyển Light/Dark
+# PowerShell 5.1 compatible — Light theme mặc định
 
 Add-Type -AssemblyName PresentationFramework
 
@@ -9,16 +9,16 @@ $xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="App Installer - Khong Dau" Width="1100" Height="700"
-        Background="#14161A" Foreground="#F2F2F2"
+        Background="#FFFFFF" Foreground="#1C1C1C"
         FontFamily="Segoe UI" FontSize="13"
         WindowStartupLocation="CenterScreen">
   <Window.Resources>
-    <!-- Palette resources (sẽ bị đổi màu động khi bấm nút Theme) -->
-    <SolidColorBrush x:Key="Accent"       Color="#2D7DFF"/>
-    <SolidColorBrush x:Key="TileBg"       Color="#30343B"/>
-    <SolidColorBrush x:Key="TileBgHover"  Color="#3B4048"/>
-    <SolidColorBrush x:Key="TileBorder"   Color="#60646D"/>
-    <SolidColorBrush x:Key="TextFg"       Color="#F2F2F2"/>
+    <!-- Palette: LIGHT -->
+    <SolidColorBrush x:Key="Accent"       Color="#2563EB"/>
+    <SolidColorBrush x:Key="TileBg"       Color="#F2F4F7"/>
+    <SolidColorBrush x:Key="TileBgHover"  Color="#E6EAF0"/>
+    <SolidColorBrush x:Key="TileBorder"   Color="#D0D5DD"/>
+    <SolidColorBrush x:Key="TextFg"       Color="#1C1C1C"/>
 
     <Style x:Key="TileCheckBox" TargetType="CheckBox">
       <Setter Property="Margin" Value="6"/>
@@ -73,7 +73,6 @@ $xaml = @"
       <Button Name="BtnGetInstalled" Content="Get Installed" Width="120" Height="32" Margin="0,0,8,0"/>
       <CheckBox Name="ChkSilent" IsChecked="True" Content="Silent" VerticalAlignment="Center" Margin="0,0,8,0"/>
       <CheckBox Name="ChkAccept" IsChecked="True" Content="Accept EULA" VerticalAlignment="Center" Margin="0,0,8,0"/>
-      <Button Name="BtnTheme" Content="Theme: Dark" Width="120" Height="32" Margin="10,0,0,0"/>
     </StackPanel>
 
     <Grid>
@@ -109,7 +108,7 @@ $xaml = @"
           <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
         <TextBlock Grid.Row="0" Text="Log" FontWeight="Bold" Margin="0,0,0,4"/>
-        <TextBox Grid.Row="1" Name="TxtLog" Background="#0F1115" Foreground="#F2F2F2" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"/>
+        <TextBox Grid.Row="1" Name="TxtLog" Background="#FFFFFF" Foreground="#1C1C1C" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"/>
       </Grid>
     </Grid>
   </DockPanel>
@@ -125,56 +124,11 @@ $PanelGroups        = $window.FindName("PanelGroups")
 $BtnInstallSelected = $window.FindName("BtnInstallSelected")
 $BtnClear           = $window.FindName("BtnClear")
 $BtnGetInstalled    = $window.FindName("BtnGetInstalled")
-$BtnTheme           = $window.FindName("BtnTheme")
 $TxtLog             = $window.FindName("TxtLog")
 $ChkSilent          = $window.FindName("ChkSilent")
 $ChkAccept          = $window.FindName("ChkAccept")
 
-# ---- Theme helpers ----
-function Set-BrushColor([string]$key, [string]$hex){
-  $b = $window.Resources[$key]
-  if(-not $b){
-    $b = New-Object Windows.Media.SolidColorBrush
-    $window.Resources.Add($key, $b)
-  }
-  $b.Color = [Windows.Media.ColorConverter]::ConvertFromString($hex)
-}
-
-$ThemeDark = @{
-  WindowBg = "#14161A"; WindowFg = "#F2F2F2"; LogBg = "#0F1115"; LogFg = "#F2F2F2";
-  Accent   = "#2D7DFF"; TileBg = "#30343B"; TileBgHover = "#3B4048"; TileBorder = "#60646D"; TextFg="#F2F2F2"
-}
-$ThemeLight = @{
-  WindowBg = "#FFFFFF"; WindowFg = "#1C1C1C"; LogBg = "#FFFFFF"; LogFg = "#1C1C1C";
-  Accent   = "#2563EB"; TileBg = "#F2F4F7"; TileBgHover = "#E6EAF0"; TileBorder = "#D0D5DD"; TextFg="#1C1C1C"
-}
-
-function Apply-Theme([string]$mode){
-  $t = if($mode -eq "Light"){ $ThemeLight } else { $ThemeDark }
-  Set-BrushColor 'Accent'      $t.Accent
-  Set-BrushColor 'TileBg'      $t.TileBg
-  Set-BrushColor 'TileBgHover' $t.TileBgHover
-  Set-BrushColor 'TileBorder'  $t.TileBorder
-  Set-BrushColor 'TextFg'      $t.TextFg
-
-  $window.Background = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString($t.WindowBg))
-  $window.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString($t.WindowFg))
-  $TxtLog.Background = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString($t.LogBg))
-  $TxtLog.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString($t.LogFg))
-}
-
-# default theme
-Apply-Theme -mode "Dark"
-$BtnTheme.Tag = "Dark"
-$BtnTheme.Add_Click({
-  if($BtnTheme.Tag -eq "Dark"){
-    Apply-Theme -mode "Light"; $BtnTheme.Tag="Light"; $BtnTheme.Content="Theme: Light"
-  } else {
-    Apply-Theme -mode "Dark";  $BtnTheme.Tag="Dark";  $BtnTheme.Content="Theme: Dark"
-  }
-})
-
-# ---- Common helpers ----
+# ---- Helpers ----
 function Log-Msg([string]$msg){
   $TxtLog.AppendText(("{0}  {1}`r`n" -f (Get-Date).ToString("HH:mm:ss"), $msg))
   $TxtLog.ScrollToEnd()
@@ -308,7 +262,7 @@ $AppCatalog = @{
   "PC Manager"    = @{ Name="PC Manager";      Ids=@("Microsoft.PCManager") }
   "Rainmeter"     = @{ Name="Rainmeter";       Ids=@("Rainmeter.Rainmeter") }
 
-  # Zalo: ưu tiên EXE bạn cung cấp + winget dự phòng
+  # Zalo: EXE + winget dự phòng
   "Zalo"          = @{
     Name="Zalo";
     Exe = @{ Url="https://res-download-pc-te-vnno-cm-1.zadn.vn/win/ZaloSetup-25.8.2.exe"; Args="/S"; Sha256="" };
