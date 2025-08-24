@@ -9,7 +9,8 @@ try { Add-Type -AssemblyName System.Web } catch {}
 
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName System.Windows.Forms
-[void][Reflection.Assembly]::LoadWithPartialName('Microsoft.VisualBasic') | Out-Null
+# LƯU Ý: KHÔNG pipe | Out-Null sau khi ép [void]
+[void][Reflection.Assembly]::LoadWithPartialName('Microsoft.VisualBasic')
 
 # ---- XAML (Light) ----
 $xaml = @"
@@ -123,7 +124,7 @@ $xaml = @"
 </Window>
 "@
 
-# ---- Load XAML (dùng Parse để tránh lỗi XmlNodeReader) ----
+# ---- Load XAML (Parse, không dùng XmlNodeReader) ----
 $ErrorActionPreference = 'Stop'
 try {
   if ([string]::IsNullOrWhiteSpace($xaml)) { throw "XAML string rong." }
@@ -240,7 +241,7 @@ function Install-OfficeODT([hashtable]$opt){
     $srcEnv  = if($opt.SourceEnvVar){$opt.SourceEnvVar}else{"OFFICE_SRC"}
     $work = Join-Path $env:TEMP "ODT_$(Get-Random)"; New-Item -ItemType Directory -Path $work -Force | Out-Null
     $odtExe = Join-Path $work "officedeploymenttool.exe"; $odtUrl = "https://officecdn.microsoft.com/pr/wsus/setup.exe"
-    Log-Msg ("Download ODT: {0}" -f $odtUrl); iwr -useb $odtUrl -OutFile $odtExe
+    Log-Msg ("Download ODT: {0}" -f $odtUrl); iwr -useb $odtExe $odtUrl -OutFile $odtExe
     Start-Process -FilePath $odtExe -ArgumentList "/quiet /extract:`"$work`"" -Wait
     $setup = Join-Path $work "setup.exe"; if(-not (Test-Path $setup)){ Log-Msg "[ERR] Khong tim thay setup.exe"; return $false }
     $cfg = @"
@@ -293,12 +294,7 @@ function Install-AHKSample(){
   $startup = Join-Path ([Environment]::GetFolderPath('Startup')) "MyHotkeys.ahk"
   $content = @"
 ; MyHotkeys.ahk - mau co ban (AutoHotkey v2)
-; Chay cung Windows (file dat trong Startup)
 #SingleInstance Force
-; Hotkey mau:
-;  - Ctrl+Alt+E: mo EVKey (neu cai)
-;  - Win+F2: tat/mở nhanh hien chu viet hoa (capslock)
-;  - CapsLock -> Esc (phu hop coder)
 ^!e::Run "C:\Program Files\EVKey\EVKey.exe"
 #F2::SetCapsLockState !GetKeyState("CapsLock","T")
 CapsLock::Esc
@@ -323,7 +319,8 @@ $AppCatalog = @{
 
   "Zalo"          = @{
     Name="Zalo";
-    Exe = @{ Url="https://res-download-pc-te-vnno-cm-1.zdnn.vn/win/ZaloSetup-25.8.2.exe"; Args="/S"; Sha256="" }
+    # Sửa domain đúng: zadn.vn
+    Exe = @{ Url="https://res-download-pc-te-vnno-cm-1.zadn.vn/win/ZaloSetup-25.8.2.exe"; Args="/S"; Sha256="" }
     Ids = @("VNG.ZaloPC","Zalo.Zalo","VNG.Zalo","VNGCorp.Zalo")
   }
   "EVKey"         = @{ Name="EVKey"; GitHub=@{ Repo="lamquangminh/EVKey" }; Ids=@("tranxuanthang.EVKey","EVKey.EVKey","EVKey") }
