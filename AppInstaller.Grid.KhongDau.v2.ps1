@@ -1,7 +1,7 @@
 # AppInstaller.Grid.KhongDau.v2.ps1
-# UI WPF (Light). PS 5.1 compatible (KHÔNG dùng ternary ?:)
+# Light UI (WPF) – PS 5.1 compatible (khong dung toan tu ternary)
 # Tabs: Install / CSVV / FONT / AutoCAD
-# Tùy chọn: "Chay ngoai Console" để mở lệnh ra cửa sổ PowerShell riêng (UI mượt)
+# Tinh nang: "Chay ngoai Console" + "1 Console" (gom winget vao 1 cua so), fix newline dính dòng
 
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 try { Add-Type -AssemblyName System.Web } catch {}
@@ -72,6 +72,7 @@ $xaml = @"
       <CheckBox Name="ChkSilent" IsChecked="True" Content="Silent" VerticalAlignment="Center" Margin="0,0,8,0"/>
       <CheckBox Name="ChkAccept" IsChecked="True" Content="Accept EULA" VerticalAlignment="Center" Margin="0,0,8,0"/>
       <CheckBox Name="ChkConsole" IsChecked="True" Content="Chay ngoai Console" VerticalAlignment="Center" Margin="0,0,8,0"/>
+      <CheckBox Name="ChkOneConsole" IsChecked="True" Content="1 Console" VerticalAlignment="Center" Margin="0,0,8,0"/>
     </StackPanel>
 
     <Grid>
@@ -119,6 +120,7 @@ $TxtLog             = $window.FindName("TxtLog")
 $ChkSilent          = $window.FindName("ChkSilent")
 $ChkAccept          = $window.FindName("ChkAccept")
 $ChkConsole         = $window.FindName("ChkConsole")
+$ChkOneConsole      = $window.FindName("ChkOneConsole")
 
 # ===== Helpers =====
 function Log-Msg([string]$msg){
@@ -133,20 +135,57 @@ function Resolve-Id([string[]]$candidates){
   }
   return $null
 }
+
+# Giữ 1 cửa sổ console (tùy chọn), và ghi file với newline chuẩn
+$global:ExtConsoleProc = $null
 function Start-ExternalConsoleFromLines([string]$title,[string[]]$lines){
   try{
     $tmp = Join-Path $env:TEMP ("run_" + [Guid]::NewGuid().ToString("N") + ".ps1")
-    # ép UTF-8 + cấu hình console UTF-8
+
     $preamble = @(
-      "try{ chcp 65001 | Out-Null }catch{}",
-      "try{ [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); [Console]::InputEncoding=[Text.UTF8Encoding]::new($false) }catch{}"
+      'try{ chcp 65001 | Out-Null }catch{}',
+      'try{ [Console]::OutputEncoding=[Text.Encoding]::UTF8; [Console]::InputEncoding=[Text.Encoding]::UTF8 }catch{}',
+      '$ErrorActionPreference = ''Continue'''
     )
-    Set-Content -Path $tmp -Value ($preamble + $lines) -Encoding UTF8
-    $exe = "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe"
+
+    # ⚠️ GHIM NEWLINE RÕ RÀNG (fix dính dòng)
+    $scriptText = (($preamble + $lines) -join [Environment]::NewLine)
+    Set-Content -Path $tmp -Value $scriptText -Encoding UTF8
+
+    # (Tùy chọn) Đóng console cũ trước khi mở console mới
+    if ($global:ExtConsoleProc -and -not $global:ExtConsoleProc.HasExited) {
+      try { $global:ExtConsoleProc.CloseMainWindow() | Out-Null; Start-Sleep -Milliseconds 400 } catch {}
+      try { if(-not $global:ExtConsoleProc.HasExited){ $global:ExtConsoleProc.Kill() } } catch {}
+    }
+
+    $exe  = "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe"
     $args = @("-NoProfile","-ExecutionPolicy","Bypass","-NoExit","-File",$tmp)
-    Start-Process -FilePath $exe -ArgumentList $args -WindowStyle Normal | Out-Null
+    $global:ExtConsoleProc = Start-Process -FilePath $exe -ArgumentList $args -WindowStyle Normal -PassThru
     Log-Msg ("[LAUNCH] {0}" -f $title)
-  } catch { Log-Msg ("[ERR] Start-ExternalConsoleFromLines: {0}" -f $_.Exception.Message) }
+  } catch {
+    Log-Msg ("[ERR] Start-ExternalConsoleFromLines: {0}" -f $_.Exception.Message)
+  }
+}
+
+function Launch-OneConsoleWingetBatch([object[]]$wingetArgsList){
+  $hdr = @(
+    'try{ chcp 65001 | Out-Null }catch{}',
+    'try{ [Console]::OutputEncoding=[Text.Encoding]::UTF8; [Console]::InputEncoding=[Text.Encoding]::UTF8 }catch{}',
+    '$ErrorActionPreference = ''Continue''',
+    'function RunWinget($arr){',
+    '  Write-Host ("`n=== winget " + ([string]::Join(" ", $arr))) -ForegroundColor Cyan',
+    '  $p = Start-Process -FilePath "winget" -ArgumentList $arr -PassThru',
+    '  $p.WaitForExit()',
+    '  Write-Host ("ExitCode: " + $p.ExitCode)',
+    '}'
+  )
+  $lines = @()
+  $lines += $hdr
+  foreach($a in $wingetArgsList){
+    $json = ($a | ConvertTo-Json -Compress)
+    $lines += '$a = @'''+$json+'''@ | ConvertFrom-Json; RunWinget $a'
+  }
+  Start-ExternalConsoleFromLines "Batch install" $lines
 }
 
 # Winget install
@@ -157,13 +196,12 @@ function Install-ById([string]$id, [string[]]$ExtraArgs=$null){
   if($ChkAccept.IsChecked){ $args += @("--accept-package-agreements","--accept-source-agreements") }
   if($ExtraArgs){ $args += $ExtraArgs }
 
-  if($ChkConsole.IsChecked){
+  if($ChkConsole.IsChecked -and -not $ChkOneConsole.IsChecked){
     $json = ConvertTo-Json -InputObject $args -Compress
     $lines = @(
-      "$ErrorActionPreference = 'Continue'",
       '$argsJson = @''',$json,'''@',
       '$a = $argsJson | ConvertFrom-Json',
-      'Write-Host ("winget " + ($a -join '' '')) -ForegroundColor Cyan',
+      'Write-Host ("winget " + ([string]::Join(" ", $a))) -ForegroundColor Cyan',
       '$p = Start-Process -FilePath "winget" -ArgumentList $a -PassThru',
       '$p.WaitForExit()',
       'Write-Host ("ExitCode: " + $p.ExitCode)',
@@ -195,7 +233,6 @@ function Install-Exe([hashtable]$exe){
 
     if($ChkConsole.IsChecked){
       $lines = @(
-        "$ErrorActionPreference = 'Continue'",
         '$u = ''' + $url + '''',
         '$f = Join-Path $env:TEMP ([IO.Path]::GetFileName(($u -split ''\?'')[0]))',
         'Write-Host ("Download: " + $u) -ForegroundColor Cyan',
@@ -231,7 +268,7 @@ function Install-Exe([hashtable]$exe){
   } catch { Log-Msg ("[ERR] Install-Exe: {0}" -f $_.Exception.Message); return $false }
 }
 
-# ZIP (giải + shortcut/startup)
+# ZIP (giai + shortcut/startup)
 function Install-ZipPackage([hashtable]$zip){
   try{ Add-Type -AssemblyName System.IO.Compression.FileSystem | Out-Null } catch {}
   $url=[string]$zip.Url; $dest=[Environment]::ExpandEnvironmentVariables([string]$zip.DestDir)
@@ -240,7 +277,6 @@ function Install-ZipPackage([hashtable]$zip){
 
   if($ChkConsole.IsChecked){
     $lines = @(
-      "$ErrorActionPreference = 'Continue'",
       '$u = ''' + $url + '''',
       '$zipPath = Join-Path $env:TEMP ([IO.Path]::GetFileName(($u -split ''\?'')[0]))',
       '$dest = ''' + $dest + '''',
@@ -311,7 +347,7 @@ function Ensure-7Zip(){ $exe=Find-7z; if($exe){return $exe}
   try{ Start-Process winget -ArgumentList @("install","-e","--id","7zip.7zip","--silent","--accept-package-agreements","--accept-source-agreements") -Wait -WindowStyle Hidden | Out-Null } catch {}
   return (Find-7z) }
 function Extract-7z([string]$archive,[string]$dest,[string]$password=""){
-  $seven = Ensure-7Zip; if(-not $seven){ Log-Msg "[ERR] Khong tim thay 7-Zip (7z.exe)."; return $false }
+  $seven = Ensure-7Zip; if($seven){ } else { Log-Msg "[ERR] Khong tim thay 7-Zip (7z.exe)."; return $false }
   if(-not (Test-Path $dest)){ New-Item -ItemType Directory -Path $dest -Force | Out-Null }
   $args = @("x","-y","-aoa","-o$dest",$archive); if($password){ $args = @("x","-y","-aoa","-p$password","-o$dest",$archive) }
   Log-Msg ("7z: {0} {1}" -f $seven, ($args -join ' '))
@@ -326,7 +362,7 @@ function Extract-ArchiveAny([string]$file,[string]$dest,[string]$password=""){
   else { return $false }
 }
 
-# MEGA (tuỳ chọn)
+# MEGA (tuy chon)
 function Ensure-MegaCmd(){
   $cmd = Get-Command mega-get -ErrorAction SilentlyContinue; if($cmd){ return $true }
   foreach($id in @("MEGA.MEGAcmd","MegaLimited.MEGAcmd","MEGA.nz.MEGAcmd")){
@@ -350,7 +386,7 @@ function Mega-DownloadToTemp([string]$megaUrl){
   ($items | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
 }
 
-# Direct-hoá URL đám mây
+# Bien doi URL cloud -> direct
 function Transform-UrlForDownload([string]$url){
   try{
     if($url -match 'onedrive\.live\.com'){
@@ -362,8 +398,6 @@ function Transform-UrlForDownload([string]$url){
   } catch {}
   return $url
 }
-
-# URL/local -> temp (file/folder)
 function Get-LocalFromSource([string]$src,[string]$password=""){
   if([string]::IsNullOrWhiteSpace($src)){ return $null }
   if($src -match '^https?://'){
@@ -394,29 +428,6 @@ function Invoke-Proc($file,$args,$wd){ $p = Start-Process -FilePath $file -Argum
 function Install-AutoCADFromExe([string]$file){
   if(-not (Test-Path $file)){ Log-Msg "[ERR] EXE/MSI khong ton tai."; return $false }
   $wd = Split-Path $file -Parent
-  if($ChkConsole.IsChecked){
-    $lines = @(
-      "$ErrorActionPreference = 'Continue'",
-      '$f = ''' + $file + '''',
-      '$wd = ''' + $wd + '''',
-      'if ($f.ToLower().EndsWith(".msi")){',
-      '  $msi = "/i `"$f`" /qn /norestart"',
-      '  Write-Host ("msiexec " + $msi) -ForegroundColor Cyan',
-      '  Start-Process msiexec -ArgumentList $msi -Wait',
-      '} else {',
-      '  $cands = @("/quiet","/silent","--quiet","--silent","/S","/VERYSILENT","/s /v`"/qn REBOOT=ReallySuppress`"","-q","")',
-      '  foreach($a in $cands){',
-      '    Write-Host ("Try: " + $f + " " + $a) -ForegroundColor Yellow',
-      '    $p = Start-Process -FilePath $f -ArgumentList $a -PassThru -WorkingDirectory $wd',
-      '    $p.WaitForExit(); if($p.ExitCode -eq 0){ break }',
-      '  }',
-      '}',
-      'Write-Host ""; Write-Host "Done. Nhan Enter de dong cua so..."',
-      '[Console]::ReadLine() | Out-Null'
-    )
-    Start-ExternalConsoleFromLines ("AutoCAD " + ([IO.Path]::GetFileName($file))) $lines
-    return $true
-  }
   if($file.ToLower().EndsWith(".msi")){
     $msiArgs = "/i `"$file`" /qn /norestart"; Log-Msg ("MSI: msiexec {0}" -f $msiArgs)
     $ec = Invoke-Proc "msiexec.exe" $msiArgs $wd; if($ec -eq 0){ Log-Msg "[OK] MSI installed"; return $true } else { Log-Msg ("[WARN] MSI exit {0}" -f $ec); return $false }
@@ -444,6 +455,7 @@ function Install-AutoCADAuto([string]$version){
 }
 function Add-AutoCADContextMenu($cb,[string]$ver){
   $cm = New-Object System.Windows.Controls.ContextMenu
+
   $miUrl = New-Object System.Windows.Controls.MenuItem
   $miUrl.Header = "Nhap URL (OneDrive/SharePoint/Dropbox/MEGA)..."
   $miUrl.Add_Click({ $def = if($AutoCADSources.ContainsKey($ver)){$AutoCADSources[$ver]} else {""}
@@ -506,6 +518,8 @@ $AppCatalog = @{
   "PowerToys"     = @{ Name="PowerToys";       Ids=@("Microsoft.PowerToys") }
   "PC Manager"    = @{ Name="PC Manager";      Ids=@("Microsoft.PCManager") }
   "Rainmeter"     = @{ Name="Rainmeter";       Ids=@("Rainmeter.Rainmeter") }
+  # HHMap 2019 (EXE)
+  "HHMap2019"     = @{ Name="HHMap 2019";      Exe=@{ Url="https://hhmaps.vn/uploads/download/files/hhmaps2019_setup.exe"; Args="/S"; Sha256="" } }
 
   "Zalo"          = @{
     Name="Zalo";
@@ -519,7 +533,7 @@ $AppCatalog = @{
   "AHK Sample"    = @{ Name="AHK Sample (Startup)"; ScriptAction="AHK_SAMPLE" }
 }
 $Groups = @(
-  @{ Title="Essentials";       Keys=@("7zip","Chrome","Notepad++","VS Code","PowerToys","PC Manager","Rainmeter") },
+  @{ Title="Essentials";       Keys=@("7zip","Chrome","Notepad++","VS Code","PowerToys","PC Manager","Rainmeter","HHMap2019") },
   @{ Title="VN Chat & Input";  Keys=@("Zalo","EVKey","UniKey","AutoHotkey","AHK Sample") }
 )
 
@@ -603,11 +617,16 @@ $BtnInstallSelected.Add_Click({
   $selected = @(); foreach($kv in $CheckBoxes.GetEnumerator()){ if($kv.Value.IsChecked){ $selected += $kv.Key } }
   if($selected.Count -eq 0){ Log-Msg "Chua chon ung dung nao."; return }
   Log-Msg ("Installing {0} item(s)..." -f $selected.Count)
+
+  $wingetBatch = @()   # mảng các mảng đối số
   foreach($k in $selected){
     $cb = $CheckBoxes[$k]; $cb.IsEnabled = $false
     try {
       if($k -like "AutoCAD *"){ [void](Install-AutoCADAuto -version $k); continue }
+
       $info = $AppCatalog[$k]
+      if($null -eq $info){ continue }
+
       if($info.ScriptAction -eq "AHK_SAMPLE"){
         if(-not (Ensure-AutoHotkey)){ continue }
         $startup = Join-Path ([Environment]::GetFolderPath('Startup')) "MyHotkeys.ahk"
@@ -624,12 +643,34 @@ TrayTip "MyHotkeys", "AutoHotkey dang chay tu Startup", 5
         $exe = Find-AutoHotkeyExe; if($exe){ Start-Process -FilePath $exe -ArgumentList "`"$startup`"" | Out-Null; Log-Msg "[OK] Da chay AHK script ngay." }
         continue
       }
+
       if($info.Exe){ [void](Install-Exe -exe $info.Exe); continue }
       if($info.Zip){ [void](Install-ZipPackage -zip $info.Zip); continue }
       if($info.GitHub){ [void](Install-GitHubLatest -gh $info.GitHub); continue }
-      if($info.Ids){ $id = Resolve-Id -candidates $info.Ids; if($id){ [void](Install-ById -id $id) } else { Log-Msg ("[ERR] not found on winget: {0}" -f ($info.Ids -join " | ")) } }
+
+      if($info.Ids){
+        $id = Resolve-Id -candidates $info.Ids
+        if($id){
+          if($ChkConsole.IsChecked -and $ChkOneConsole.IsChecked){
+            $arr = @("install","-e","--id",$id)
+            if($ChkSilent.IsChecked){ $arr += "--silent" }
+            if($ChkAccept.IsChecked){ $arr += @("--accept-package-agreements","--accept-source-agreements") }
+            $wingetBatch += ,$arr
+          } else {
+            [void](Install-ById -id $id)
+          }
+        } else {
+          Log-Msg ("[ERR] not found on winget: {0}" -f ($info.Ids -join " | "))
+        }
+      }
     } finally { $cb.IsEnabled = $true }
   }
+
+  if($wingetBatch.Count -gt 0 -and $ChkConsole.IsChecked -and $ChkOneConsole.IsChecked){
+    Launch-OneConsoleWingetBatch $wingetBatch
+    Log-Msg ("[Batch] Da phat lenh cai {0} goi winget trong 1 console." -f $wingetBatch.Count)
+  }
+
   Log-Msg "Done."
 })
 
